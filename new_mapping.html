@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Rocket Tracker</title>
+
+  <!-- CesiumJS -->
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <!-- HUD font -->
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+
+
+  <style>
+    html,body, #cesiumContainer {
+      width: 100%;
+      height: 100%;
+      margin: 0; padding: 0; overflow: hidden;
+      font-family: 'Orbitron', sans-serif;
+    }
+
+    /* Hide Cesium branding (⚠️ only if permitted) */
+    .cesium-viewer-bottom,
+    .cesium-viewer-cesiumWidgetContainer .cesium-credit-lightbox {
+      display: none !important;
+    }
+
+    /* HUD-style gauges in a single bottom row */
+    .hud-gauge {
+      position: absolute;
+      width: 220px;
+      height: 120px;
+      background: transparent;
+      border-radius: 12px;
+      overflow: hidden;
+      z-index: 999;
+    }
+    .hud-gauge svg { width: 100%; height: 100%; }
+
+    .hud-label { font-size: 14px; fill: #ccc; text-anchor: middle; }
+    .hud-value { font-size: 20px; fill: #ecf2f1; text-anchor: middle; font-weight: bold; }
+
+    .gauge-temperature { bottom: 100px; left: 50px; }
+    .gauge-pressure    { bottom: 100px; left: 290px; }
+    .gauge-acceleration{ bottom: 100px; right: 290px; }
+    .gauge-altitude    { bottom: 100px; right: 50px; }
+
+    #coordSidebar {
+      position: absolute;
+      top: 180px;
+      right: 150px;
+      background: rgba(13, 13, 21, 0.15);
+      padding: 20px 25px;
+      border-radius: 10px;
+      color: #c1c6c8;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+      width: 250px;
+    }
+
+    #coordSidebar h4 {
+      margin: 0 0 15px 0;
+      font-size: 23px;
+      color: #d63447;
+      font-weight: 600;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 5px;
+    }
+
+    #coordSidebar p {
+      margin: 8px 10px;
+      font-size: 19px;
+    }
+
+    #coordSidebar span {
+      font-weight: bold;
+      color: #f6f3f3;
+    }
+
+    #saveCoordBtn {
+      margin-top: 15px;
+      padding: 8px 16px;
+      background: #d63447;
+      border: none;
+      border-radius: 5px;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.3s ease;
+      width: 100%;
+    }
+
+    #saveCoordBtn:hover {
+      background: #b32235;
+    }
+
+    .container {
+        position: absolute;
+        top: 0px;
+        right: 470px;
+        z-index: 1000;
+        background: transparent;
+        color: rgb(251, 250, 250);
+        padding: 15px;
+        border-radius: 8px;
+        font-family: sans-serif;
+    }
+
+    .header .title {
+      display: inline-block;
+      margin: 0;
+      font-size: 24px;
+      
+    }
+
+    .version {
+      font-size: 0.7em;
+      color: #888;
+      vertical-align: super;
+    }
+
+    .author {
+      margin: 0;
+      font-size: 0.9em;
+      color: #333;
+    }
+
+    .years {
+      color: #888;
+    }
+
+    .info {
+      margin: 10px 0;
+      font-size: 0.85em;
+    }
+
+    .info a {
+      color: #3366cc;
+      text-decoration: underline;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .row {
+      flex: 1 1 45%;
+      min-width: 300px;
+    }
+
+    .row label {
+      font-weight: bold;
+      margin-right: 5px;
+    }
+
+    .row input[type="text"] {
+      width: 60px;
+      margin-right: 5px;
+    }
+
+    .row input[type="checkbox"] {
+      margin-left: 10px;
+    }
+
+    .row select {
+      margin-left: 5px;
+    }
+
+    .row span {
+      margin-right: 5px;
+    }
+    .control-panel {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 1000;
+        max-width: 400px; /* optional: limit width */
+    }
+    #cesiumContainer {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        z-index: 0;
+    }
+
+  </style>
+</head>
+<body>
+  <!-- 3D Map -->
+  <div id="cesiumContainer"></div>
+
+  <div id="coords" style="position:absolute; top:10px; left:10px; color:white; font-size:16px;"></div>
+
+  <!-- 📌 Sidebar to show lat/lng -->
+    <div id="coordSidebar">
+        <h4>Target Location</h4>
+        <p><strong>Latitude:</strong> <span id="latVal">--</span></p>
+        <p><strong>Longitude:</strong> <span id="lngVal">--</span></p>
+        <p><strong>Altitude:</strong> <span id="altVal">--</span></p>
+        <button id="saveCoordBtn" >FIX TARGET</button>
+    </div>
+   <div class="control-panel"></div>
+    <div class="container">
+        <div class="header">
+        <h1 class="title" style="color: #d63447; padding-bottom: 6px;">SPACE ZONE DEFENCE </h1>
+        </div>
+        <div class="controls">
+        <div class="row">
+            <label>Launch site:</label>
+            <input type="text" value="35, 0"> 
+        </div>
+        <div class="row">
+            <label>Target latitude:</label>
+            <span id="tlat" style="background-color: #faf8f8; color: #080808;">none</span> 
+        </div>
+        <div class="row">
+            <label>Distance:</label>
+            <span id="tardis" style="background-color: #faf8f8; color: #080808;">123 km</span>
+        </div>
+        <div class="row">
+            <label>SSPK:</label>
+            <span>N/A</span> 
+        </div>
+        <div class="row">
+            <label for="rangeInput" style="color:white;">Range (km):</label>
+            <input 
+              type="number" 
+              id="rangeInput" 
+              placeholder="e.g. 50" 
+              step="1" 
+              style="width:60px; margin-left:5px;"
+            />
+            <label>Yield:</label>
+            <input type="text" value="0"> kt
+            <input type="checkbox"> Animate CEP
+            <button id="drawRangeBtn" style="left: 4px; background: #d63447; color: #fbf9f9; border-radius: 5px;">Enter</button>
+        </div>
+        <div class="row">
+            <label>CEP:</label>
+            <input type="text" value="0"> m
+            <select>
+            <option>Blast damage display:</option>
+            </select>
+        </div>
+        <div class="row">
+            <label>Launch preset:</label>
+            <select>
+            <option>-- Select --</option>
+            </select>
+        </div>
+        <div class="row">
+            <label>Missile preset:</label>
+            <select>
+            <option>-- Select --</option>
+            </select>
+        </div>
+        </div>
+    </div>
+ 
+
+  <!-- Temperature Gauge -->
+  <div class="hud-gauge gauge-temperature">
+    <svg viewBox="0 0 220 120">
+      <defs>
+        <linearGradient id="tempGradient">
+          <stop offset="0%" stop-color="#00f"/>
+          <stop offset="50%" stop-color="#0ff"/>
+          <stop offset="100%" stop-color="#f00"/>
+        </linearGradient>
+      </defs>
+      <path d="M20,100 A90,90 0 0,1 200,100" fill="none" stroke="#222" stroke-width="10"/>
+      <path id="tempArc" d="M20,100 A90,90 0 0,1 200,100" fill="none"
+            stroke="url(#tempGradient)" stroke-width="10"
+            stroke-dasharray="283" stroke-dashoffset="283"/>
+      <text class="hud-value" x="110" y="80" id="tempText">0</text>
+      <text class="hud-label" x="110" y="100">TEMPERATURE (°C)</text>
+    </svg>
+  </div>
+
+  <!-- Pressure Gauge -->
+  <div class="hud-gauge gauge-pressure">
+    <svg viewBox="0 0 220 120">
+      <defs>
+        <linearGradient id="pressGradient">
+          <stop offset="0%" stop-color="#fff"/>
+          <stop offset="50%" stop-color="#0f0"/>
+          <stop offset="100%" stop-color="#f00"/>
+        </linearGradient>
+      </defs>
+      <path d="M20,100 A90,90 0 0,1 200,100" fill="none" stroke="#222" stroke-width="10"/>
+      <path id="pressArc" d="M20,100 A90,90 0 0,1 200,100" fill="none"
+            stroke="url(#pressGradient)" stroke-width="10"
+            stroke-dasharray="283" stroke-dashoffset="283"/>
+      <text class="hud-value" x="110" y="80" id="pressText">0</text>
+      <text class="hud-label" x="110" y="100">PRESSURE (Pa)</text>
+    </svg>
+  </div>
+
+  <!-- Acceleration Gauge -->
+  <div class="hud-gauge gauge-acceleration">
+    <svg viewBox="0 0 220 120">
+      <defs>
+        <linearGradient id="accGradient">
+          <stop offset="0%" stop-color="#0ff"/>
+          <stop offset="50%" stop-color="#0f0"/>
+          <stop offset="100%" stop-color="#f00"/>
+        </linearGradient>
+      </defs>
+      <path d="M20,100 A90,90 0 0,1 200,100" fill="none" stroke="#222" stroke-width="10"/>
+      <path id="accArc" d="M20,100 A90,90 0 0,1 200,100" fill="none"
+            stroke="url(#accGradient)" stroke-width="10"
+            stroke-dasharray="283" stroke-dashoffset="283"/>
+      <text class="hud-value" x="110" y="80" id="accText">0</text>
+      <text class="hud-label" x="110" y="100">ACCELERATION (m/s²)</text>
+    </svg>
+  </div>
+
+  <!-- Altitude Gauge -->
+  <div class="hud-gauge gauge-altitude">
+    <svg viewBox="0 0 220 120">
+      <defs>
+        <linearGradient id="altGradient">
+          <stop offset="0%" stop-color="#0f0"/>
+          <stop offset="50%" stop-color="#ff0"/>
+          <stop offset="100%" stop-color="#f00"/>
+        </linearGradient>
+      </defs>
+      <path d="M20,100 A90,90 0 0,1 200,100" fill="none" stroke="#222" stroke-width="10"/>
+      <path id="altArc" d="M20,100 A90,90 0 0,1 200,100" fill="none"
+            stroke="url(#altGradient)" stroke-width="10"
+            stroke-dasharray="283" stroke-dashoffset="283"/>
+      <text class="hud-value" x="110" y="80" id="altText">0</text>
+      <text class="hud-label" x="110" y="100">ALTITUDE (m)</text>
+    </svg>
+  </div>
+
+  <script>
+    let clickPinEntity = null;
+
+    // Cesium token
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI2MDQzZWIxMi0wMGIxLTQyZmYtODU1ZS05OTE0N2FkNzU0MjUiLCJpZCI6MzA0Njc0LCJpYXQiOjE3NDc4MDMwNDJ9.ELvkLmN5mtcb-yupEk3qwQ-6KYO_yKRGck8HXDml6vw';
+
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      terrainProvider: Cesium.CesiumTerrainProvider.fromIonAssetId(1),
+      shouldAnimate: true, timeline: true, animation: false
+    });
+    
+
+    const rocket = viewer.entities.add({
+      name: "MISSILE",
+      position: Cesium.Cartesian3.fromDegrees(80.19167, 12.76052, 100),
+      point: {
+        pixelSize: 10,
+        color: Cesium.Color.RED,
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 2
+      },
+      label: {
+        text: "MISSILE",
+        font: "10px sans-serif",
+        fillColor: Cesium.Color.WHITE,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        outlineWidth: 2,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffset: new Cesium.Cartesian2(0, -12)
+      }
+    });
+
+    let hasZoomed = false;
+    let circleEntity = null;
+
+
+
+
+    // Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyA6k9j-MOIFnkewyTijOx0",
+      authDomain: "missiletelementry.firebaseapp.com",
+      databaseURL: "https://missily-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "missiletelementry",
+      storageBucket: "missiletelementry.firebasestorage.app",
+      messagingSenderId: "226692769337",
+      appId: "1:226692769337:web:f4cca533264c4cd0fd8fe8"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const locationRef = db.ref('sensor');
+
+    // Arc gauge updater
+    function updateArcGauge(value, max, arcId, textId) {
+      const pct = Math.min(value/max,1);
+      const offset = 283 - (283*pct);
+      document.getElementById(arcId).style.strokeDashoffset = offset;
+      document.getElementById(textId).textContent = Math.round(value);
+    }
+
+        // Real-time listener
+    let lastPosition = null;
+    let updateInterval = 100; // in ms
+    let lastUpdateTime = 0;
+    let targetLineEntity = null;
+    let rangeCircleEntity = null;
+
+
+
+// Smooth move function (lerp between two Cartesian3 positions)
+  function smoothMove(current, target, alpha = 0.2) {
+    return new Cesium.Cartesian3(
+      Cesium.Math.lerp(current.x, target.x, alpha),
+      Cesium.Math.lerp(current.y, target.y, alpha),
+      Cesium.Math.lerp(current.z, target.z, alpha)
+    );
+  }
+
+
+  function updateRocket(lat, lng, alt) {
+    const targetPosition = Cesium.Cartesian3.fromDegrees(lng, lat, alt);
+    if (!lastPosition) {
+      lastPosition = targetPosition;
+      rocket.position = new Cesium.ConstantPositionProperty(targetPosition);
+      return;
+    }
+
+    const smoothed = smoothMove(lastPosition, targetPosition, 0.1);
+    lastPosition = smoothed;
+    rocket.position = new Cesium.ConstantPositionProperty(smoothed);
+  }
+
+// Polling the database every X ms
+  setInterval(() => {
+    locationRef.once('value', snap => {
+      const pos = snap.val();
+      if (!pos || pos.latitude == null || pos.longitude == null) return;
+
+      const lat  = pos.latitude;
+      const lng  = pos.longitude;
+      const alt  = pos.gpsAlt       || 0;
+      const acc  = pos.acceleration || 0;
+      const press= pos.pressure     || 0;
+      const temp = pos.temperature  || 0;
+
+      updateRocket(lat, lng, alt);
+
+      // Update HUD gauges
+      updateArcGauge(temp,   100,   'tempArc',  'tempText');
+      updateArcGauge(press, 1200,'pressArc','pressText');
+      updateArcGauge(acc,     50,   'accArc',   'accText');
+      updateArcGauge(alt,   1000,   'altArc',   'altText');
+      
+
+    });
+  }, updateInterval);
+
+    // Create click handler
+      // Accurate position from globe using double-click
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    handler.setInputAction(function (click) {
+        const cartesian = viewer.scene.camera.pickEllipsoid(click.position, viewer.scene.globe.ellipsoid);
+        if (!Cesium.defined(cartesian)) return;
+
+        const carto = Cesium.Cartographic.fromCartesian(cartesian);
+        const lat = Cesium.Math.toDegrees(carto.latitude);
+        const lng = Cesium.Math.toDegrees(carto.longitude);
+        const alt = carto.height || 0;
+
+        document.getElementById("latVal").textContent = lat.toFixed(5);
+        document.getElementById("lngVal").textContent = lng.toFixed(5);
+        document.getElementById("altVal").textContent = alt.toFixed(2);
+
+        if (clickPinEntity) {
+            viewer.entities.remove(clickPinEntity);
+        }
+
+        clickPinEntity = viewer.entities.add({
+            name: "Target",
+            position: Cesium.Cartesian3.fromDegrees(lng, lat, alt),
+            point: {
+            pixelSize: 10,
+            color: Cesium.Color.YELLOW,
+            },
+            label: {
+            text: "Target",
+            font: "12px sans-serif",
+            fillColor: Cesium.Color.YELLOW,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -12),
+            },
+        });
+        }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+
+   
+
+  document.getElementById('saveCoordBtn').addEventListener('click', () => {
+    const lat = parseFloat(document.getElementById('latVal').textContent);
+    const lng = parseFloat(document.getElementById('lngVal').textContent);
+    const alt = parseFloat(document.getElementById('altVal').textContent);
+
+    if (isNaN(lat) || isNaN(lng) || isNaN(alt)) {
+      alert('No valid coordinates to save!');
+      return;
+    }
+
+    db.ref('target').set({ latitude: lat, longitude: lng, altitude: alt })
+      .then(() => console.log('Saved:', lat, lng, alt))
+      .catch(err => console.error('Error saving:', err));
+
+        const targetPosition = Cesium.Cartesian3.fromDegrees(lng, lat, alt);
+        const rocketPosition = rocket.position.getValue(Cesium.JulianDate.now());
+
+        if (targetLineEntity) {
+          viewer.entities.remove(targetLineEntity);
+        }
+        targetLineEntity = viewer.entities.add({
+          polyline: {
+            positions: [rocketPosition, targetPosition],
+            width: 4,
+            material: new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.2,
+              taperPower: 0.5,
+              color: Cesium.Color.RED
+            }),
+            arcType: Cesium.ArcType.GEODESIC,
+            clampToGround: false
+          }
+        });
+
+        
+         if (rangeCircleEntity) {
+      viewer.entities.remove(rangeCircleEntity);
+    }
+
+    // e.g. read the range value (km) from an input, or hard-code:
+    const rangeInput = document.getElementById('rangeInput');
+    const rangeKm = parseFloat(rangeInput?.value) || 50; // default 50 km
+    const rangeMeters = rangeKm * 1000;
+
+    rangeCircleEntity = viewer.entities.add({
+      position: rocketPosition,
+      ellipse: {
+        semiMajorAxis: rangeMeters,
+        semiMinorAxis: rangeMeters,
+        height: 0, // set to ground. Use a positive value to float above terrain.
+        material: Cesium.Color.RED.withAlpha(0.3),
+        outline: true,
+        outlineColor: Cesium.Color.RED.withAlpha(0.8),
+        outlineWidth: 2
+      }
+    });
+     //--red line--//
+    
+});
+
+  </script>
+</body>
+</html>
